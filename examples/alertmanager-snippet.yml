@@ -1,0 +1,21 @@
+# Drop-in Alertmanager route → alert-explainer.
+#
+# Add this to your alertmanager.yml under `receivers:` (and route to it from your top-level route).
+# alert-explainer accepts the standard Alertmanager v4 webhook payload, no transformation needed.
+
+receivers:
+  - name: alert-explainer
+    webhook_configs:
+      - url: http://alert-explainer.observability.svc.cluster.local:8080/webhook
+        send_resolved: true
+        max_alerts: 100  # Alertmanager's own batching; alert-explainer also has its own queue.
+
+# Example route fragment — only critical and warning alerts go through enrichment.
+# Info-tier alerts skip enrichment to stay under SLO cost target.
+route:
+  receiver: alert-explainer
+  routes:
+    - matchers: [ severity =~ "critical|warning" ]
+      receiver: alert-explainer
+    - matchers: [ severity = "info" ]
+      receiver: default-no-enrich

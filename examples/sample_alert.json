@@ -1,0 +1,29 @@
+{
+  "version": "4",
+  "groupKey": "{}:{alertname=\"HighErrorRate\"}",
+  "receiver": "alert-explainer",
+  "status": "firing",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "HighErrorRate",
+        "severity": "critical",
+        "service": "checkout-api",
+        "namespace": "prod",
+        "cluster": "us-east-1"
+      },
+      "annotations": {
+        "summary": "5xx error rate above 5% on checkout-api for 10m",
+        "description": "checkout-api is returning 5xx for ~7% of requests. Started after deploy v412.",
+        "runbook_url": "https://runbooks.example.com/checkout-api-5xx"
+      },
+      "startsAt": "2026-04-28T12:00:00Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "https://prom.example.com/graph?g0.expr=...",
+      "fingerprint": "abc123"
+    }
+  ],
+  "commonLabels": {"alertname": "HighErrorRate", "severity": "critical"},
+  "commonAnnotations": {}
+}

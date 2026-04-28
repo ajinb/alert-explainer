@@ -1,0 +1,16 @@
+services:
+  alert-explainer:
+    build: .
+    image: alert-explainer:dev
+    ports: ["8080:8080"]
+    environment:
+      ALERT_EXPLAINER_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ALERT_EXPLAINER_MODEL: claude-sonnet-4-6
+      # Leave DOWNSTREAM_WEBHOOK_URL empty to print enriched alerts to stdout.
+      ALERT_EXPLAINER_DOWNSTREAM_WEBHOOK_URL: ${DOWNSTREAM_WEBHOOK_URL:-}
+      ALERT_EXPLAINER_LOG_LEVEL: INFO
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx,sys; sys.exit(0 if httpx.get('http://127.0.0.1:8080/healthz').status_code==200 else 1)"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
