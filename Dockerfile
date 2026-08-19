@@ -1,22 +1,25 @@
 FROM python:3.12-slim AS build
-# cloudandsre is a direct git+https dependency (it is not on PyPI), so pip needs
-# a git client to resolve it. Installing it here keeps it out of the runtime
-# image — a production container has no business shipping a VCS client.
+# cloudandsre is a direct git+https dependency (not on PyPI), so pip needs a git
+# client to resolve it. It stays in this stage — a production container has no
+# business shipping a VCS client.
 RUN apt-get update && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
+
+# Resolve everything into a venv here, then copy the venv to the runtime stage.
+# Installing from wheels in the runtime stage does not work: the wheel metadata
+# records the direct URL, so pip re-invokes git even with --no-index.
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
-# Build the app wheel, then build wheels for it and every dependency, so the
-# runtime stage can install completely offline.
-RUN pip install --no-cache-dir --upgrade pip build && \
-    python -m build --wheel --outdir /dist && \
-    pip wheel --no-cache-dir --wheel-dir /wheels /dist/*.whl
+RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir .
 
 FROM python:3.12-slim
+COPY --from=build /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /app
-COPY --from=build /wheels /wheels
-RUN pip install --no-cache-dir --no-index --find-links=/wheels alert-explainer && rm -rf /wheels
 RUN useradd --no-create-home --uid 1000 app
 USER 1000
 EXPOSE 8080
