@@ -97,13 +97,11 @@ def _strip_code_fence(text: str) -> str:
     if t.startswith("```"):
         t = t.split("\n", 1)[1] if "\n" in t else t[3:]
         if t.endswith("```"):
-            t = t[: -3]
+            t = t[:-3]
     return t.strip()
 
 
-async def _call_model(
-    client: AsyncAnthropic, alert: Alert, *, correction: str | None = None
-):
+async def _call_model(client: AsyncAnthropic, alert: Alert, *, correction: str | None = None):
     """One request to the model. Transport and timeout faults surface as RuntimeError.
 
     ``correction`` appends a follow-up turn restating the output contract, used
@@ -169,9 +167,7 @@ async def enrich_alert(alert: Alert, *, client: AsyncAnthropic | None = None) ->
         )
 
 
-def _parse_enrichment(
-    raw: str, cost: float, cache_hit: bool, started: float
-) -> Enrichment:
+def _parse_enrichment(raw: str, cost: float, cache_hit: bool, started: float) -> Enrichment:
     """Turn raw model text into an Enrichment, or raise EnrichmentSchemaError."""
     try:
         data = json.loads(_strip_code_fence(raw))
