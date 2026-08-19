@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
 import structlog
-from fastapi import FastAPI, Response, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
+from pydantic import ValidationError
 
 from . import __version__, sink
 from .config import settings
@@ -19,9 +22,65 @@ log = structlog.get_logger()
 
 queue = AlertWorkQueue(sink=sink.send)
 
+SIGNATURE_HEADER = "X-Alert-Explainer-Signature"
+
+
+def _expected_signature(secret: str, body: bytes) -> str:
+    return "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+def _bearer_ok(request: Request, token: str) -> bool:
+    header = request.headers.get("authorization", "")
+    scheme, _, presented = header.partition(" ")
+    if scheme.lower() != "bearer":
+        return False
+    return hmac.compare_digest(presented, token)
+
+
+def _signature_ok(request: Request, secret: str, body: bytes) -> bool:
+    provided = request.headers.get(SIGNATURE_HEADER, "")
+    return hmac.compare_digest(provided, _expected_signature(secret, body))
+
+
+def _authenticate(request: Request, body: bytes) -> None:
+    """Reject requests that present neither a valid bearer token nor a valid signature.
+
+    Every accepted alert costs a paid LLM call, so an open endpoint is a
+    cost-amplification DoS, not just an integrity problem. Either mechanism is
+    sufficient; see config for why both exist.
+    """
+    token = settings.webhook_bearer_token
+    secret = settings.webhook_hmac_secret
+    if not token and not secret:
+        return  # Verification disabled; startup logs a warning.
+
+    if token and _bearer_ok(request, token):
+        return
+    if secret and _signature_ok(request, secret, body):
+        return
+
+    log.warning(
+        "webhook_auth_rejected",
+        client=request.client.host if request.client else None,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Missing or invalid webhook credentials.",
+    )
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> Any:
+    if not settings.webhook_bearer_token and not settings.webhook_hmac_secret:
+        log.warning(
+            "webhook_authentication_disabled",
+            detail=(
+                "Neither ALERT_EXPLAINER_WEBHOOK_BEARER_TOKEN nor "
+                "ALERT_EXPLAINER_WEBHOOK_HMAC_SECRET is set — /webhook accepts "
+                "unauthenticated requests and each one bills an LLM call. "
+                "Set one before exposing this service."
+            ),
+        )
     await queue.start()
     yield
     await queue.stop()
@@ -31,9 +90,44 @@ app = FastAPI(title="alert-explainer", version=__version__, lifespan=lifespan)
 
 
 @app.post("/webhook", status_code=status.HTTP_202_ACCEPTED)
-async def receive_alertmanager(payload: AlertmanagerPayload) -> dict[str, Any]:
+async def receive_alertmanager(request: Request) -> dict[str, Any]:
     """Alertmanager webhook entry point. Buffers alerts onto the priority queue and returns
-    immediately so Alertmanager's own retries do not stack up behind LLM latency."""
+    immediately so Alertmanager's own retries do not stack up behind LLM latency.
+
+    Signature-verified and size-bounded before anything is parsed or enqueued.
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > settings.max_body_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Body exceeds {settings.max_body_bytes} bytes.",
+        )
+
+    body = await request.body()
+    if len(body) > settings.max_body_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Body exceeds {settings.max_body_bytes} bytes.",
+        )
+
+    _authenticate(request, body)
+
+    try:
+        payload = AlertmanagerPayload.model_validate_json(body)
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.errors()
+        ) from e
+
+    if len(payload.alerts) > settings.max_alerts_per_request:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"{len(payload.alerts)} alerts in one request exceeds the "
+                f"{settings.max_alerts_per_request} limit."
+            ),
+        )
+
     accepted = 0
     dropped = 0
     for alert in payload.alerts:
