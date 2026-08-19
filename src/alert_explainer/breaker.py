@@ -22,9 +22,20 @@ class CircuitOpen(Exception):
 
 
 class CircuitBreaker(Generic[T]):
-    def __init__(self, *, failure_threshold: int, reset_seconds: float) -> None:
+    def __init__(
+        self,
+        *,
+        failure_threshold: int,
+        reset_seconds: float,
+        ignore_exceptions: tuple[type[BaseException], ...] = (),
+    ) -> None:
         self._failure_threshold = failure_threshold
         self._reset_seconds = reset_seconds
+        # Exception types that propagate without counting as a failure. A breaker
+        # exists to shed load when a dependency is unhealthy; faults that say
+        # nothing about its health (a badly shaped but promptly delivered
+        # response) must not be able to open it.
+        self._ignore_exceptions = ignore_exceptions
         self._failures = 0
         self._opened_at: float | None = None
         self._lock = asyncio.Lock()
@@ -44,6 +55,8 @@ class CircuitBreaker(Generic[T]):
 
         try:
             result = await fn()
+        except self._ignore_exceptions:
+            raise
         except Exception:
             async with self._lock:
                 self._failures += 1
