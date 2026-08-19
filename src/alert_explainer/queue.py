@@ -16,8 +16,9 @@ import time
 from collections.abc import Awaitable, Callable
 
 import structlog
+from cloudandsre import AsyncCircuitBreaker
+from cloudandsre.circuit_breaker import CircuitOpenError
 
-from .breaker import CircuitBreaker, CircuitOpen
 from .config import settings
 from .enrich import EnrichmentSchemaError, enrich_alert
 from .models import Alert, EnrichedAlert
@@ -35,9 +36,9 @@ class AlertWorkQueue:
             maxsize=settings.queue_maxsize
         )
         self._sink = sink
-        self._breaker: CircuitBreaker[None] = CircuitBreaker(
+        self._breaker: AsyncCircuitBreaker[None] = AsyncCircuitBreaker(
             failure_threshold=settings.breaker_failure_threshold,
-            reset_seconds=settings.breaker_reset_seconds,
+            reset_after_seconds=settings.breaker_reset_seconds,
             # A malformed reply means the LLM is up and answering, just not in
             # the shape we asked for. Counting that as a breaker failure let bad
             # model output degrade enrichment for every alert behind it.
@@ -103,7 +104,7 @@ class AlertWorkQueue:
         try:
             enrichment = await self._breaker.call(lambda: enrich_alert(alert))
             return EnrichedAlert(alert=alert, enrichment=enrichment)
-        except CircuitOpen:
+        except CircuitOpenError:
             log.warning(
                 "circuit_open_passthrough",
                 alertname=alert.alertname,

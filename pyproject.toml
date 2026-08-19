@@ -17,6 +17,9 @@ classifiers = [
   "Topic :: System :: Monitoring",
 ]
 dependencies = [
+  # Not on PyPI, so a direct URL. This makes alert-explainer itself
+  # unpublishable to PyPI, which is fine — it is a service, not a library.
+  "cloudandsre @ git+https://github.com/ajinb/cloudandsre-python.git@main",
   "anthropic>=0.39.0",
   "fastapi>=0.115.0",
   "uvicorn[standard]>=0.32.0",
@@ -46,6 +49,11 @@ Blog = "https://cloudandsre.com"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# Required for the git-URL dependency on cloudandsre. Hatchling refuses direct
+# references without it.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/alert_explainer"]
