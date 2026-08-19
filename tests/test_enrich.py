@@ -6,9 +6,9 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from cloudandsre import AsyncCircuitBreaker
 
 from alert_explainer import enrich as enrich_module
-from alert_explainer.breaker import CircuitBreaker
 from alert_explainer.enrich import EnrichmentSchemaError, enrich_alert
 from alert_explainer.models import Alert
 
@@ -103,9 +103,9 @@ async def test_json_array_is_a_schema_error(alert, monkeypatch):
 
 
 async def test_schema_errors_never_open_the_breaker():
-    breaker: CircuitBreaker[None] = CircuitBreaker(
+    breaker: AsyncCircuitBreaker[None] = AsyncCircuitBreaker(
         failure_threshold=2,
-        reset_seconds=30,
+        reset_after_seconds=30,
         ignore_exceptions=(EnrichmentSchemaError,),
     )
 
@@ -120,9 +120,9 @@ async def test_schema_errors_never_open_the_breaker():
 
 
 async def test_real_failures_still_open_the_breaker():
-    breaker: CircuitBreaker[None] = CircuitBreaker(
+    breaker: AsyncCircuitBreaker[None] = AsyncCircuitBreaker(
         failure_threshold=2,
-        reset_seconds=30,
+        reset_after_seconds=30,
         ignore_exceptions=(EnrichmentSchemaError,),
     )
 

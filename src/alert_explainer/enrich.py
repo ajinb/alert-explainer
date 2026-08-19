@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 
 from anthropic import APIError, APITimeoutError, AsyncAnthropic
+from cloudandsre.cost import cost_for_message
 from pydantic import ValidationError
 
 from .config import settings
@@ -45,12 +47,6 @@ Rules:
 - Never fabricate runbook URLs, service names, or dashboards that are not in the input.
 - Output JSON only — no markdown, no prose around it."""
 
-# Anthropic pricing (Sonnet-4-6 / 2026 list): $3/MTok input, $15/MTok output.
-# Cache reads are ~1/10 input cost on hit.
-_PRICE_INPUT_PER_TOK = 3.0 / 1_000_000
-_PRICE_CACHE_READ_PER_TOK = 0.30 / 1_000_000
-_PRICE_OUTPUT_PER_TOK = 15.0 / 1_000_000
-
 
 def _format_alert(alert: Alert) -> str:
     payload = {
@@ -66,18 +62,15 @@ def _format_alert(alert: Alert) -> str:
 
 
 def _estimate_cost(usage: object) -> tuple[float, bool]:
-    """Return (cost_usd, cache_hit) from an Anthropic usage block."""
-    in_tok = getattr(usage, "input_tokens", 0)
-    out_tok = getattr(usage, "output_tokens", 0)
-    cache_read = getattr(usage, "cache_read_input_tokens", 0)
-    cache_create = getattr(usage, "cache_creation_input_tokens", 0)
-    cost = (
-        in_tok * _PRICE_INPUT_PER_TOK
-        + cache_create * _PRICE_INPUT_PER_TOK * 1.25  # cache writes cost ~25% more
-        + cache_read * _PRICE_CACHE_READ_PER_TOK
-        + out_tok * _PRICE_OUTPUT_PER_TOK
-    )
-    return cost, cache_read > 0
+    """Return (cost_usd, cache_hit) for an Anthropic usage block.
+
+    Pricing lives in cloudandsre.cost so the table is maintained in one place
+    rather than drifting between every tool that needs it.
+    """
+    message = SimpleNamespace(model=settings.model, usage=usage)
+    breakdown = cost_for_message(message)
+    cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    return float(breakdown["usd"]), cache_read > 0
 
 
 def _first_text(msg: object) -> str:
