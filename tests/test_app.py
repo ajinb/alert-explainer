@@ -126,7 +126,10 @@ def test_wrong_signature_is_rejected(signed_client: TestClient) -> None:
     r = signed_client.post(
         "/webhook",
         content=body,
-        headers={"content-type": "application/json", "X-Alert-Explainer-Signature": "sha256=deadbeef"},
+        headers={
+            "content-type": "application/json",
+            "X-Alert-Explainer-Signature": "sha256=deadbeef",
+        },
     )
     assert r.status_code == 401
 
@@ -193,13 +196,13 @@ def test_long_annotation_values_are_truncated_not_rejected() -> None:
 def test_bearer_token_is_accepted(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     # Alertmanager cannot sign requests, so bearer is the deployable path.
     monkeypatch.setattr(settings, "webhook_bearer_token", "tok-abc")
-    r = client.post(
-        "/webhook", json=_payload(), headers={"Authorization": "Bearer tok-abc"}
-    )
+    r = client.post("/webhook", json=_payload(), headers={"Authorization": "Bearer tok-abc"})
     assert r.status_code == 202
 
 
-def test_wrong_bearer_token_is_rejected(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wrong_bearer_token_is_rejected(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(settings, "webhook_bearer_token", "tok-abc")
     r = client.post("/webhook", json=_payload(), headers={"Authorization": "Bearer nope"})
     assert r.status_code == 401
@@ -227,8 +230,6 @@ def test_either_mechanism_validates_when_both_configured(
             "X-Alert-Explainer-Signature": _sign("test-secret", body),
         },
     )
-    bearer = client.post(
-        "/webhook", json=_payload(), headers={"Authorization": "Bearer tok-abc"}
-    )
+    bearer = client.post("/webhook", json=_payload(), headers={"Authorization": "Bearer tok-abc"})
     assert signed.status_code == 202
     assert bearer.status_code == 202

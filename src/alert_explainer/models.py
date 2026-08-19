@@ -28,6 +28,7 @@ class Alert(BaseModel):
     @classmethod
     def _cap_field_lengths(cls, v: dict[str, str]) -> dict[str, str]:
         return _truncate_values(v)
+
     startsAt: str = ""
     endsAt: str = ""
     generatorURL: str = ""
