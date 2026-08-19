@@ -90,6 +90,10 @@ All settings are environment variables under the `ALERT_EXPLAINER_` prefix.
 | `ANTHROPIC_API_KEY` | *(empty)* | Required. Your Anthropic API key. |
 | `MODEL` | `claude-sonnet-4-6` | Anthropic model. Use `claude-haiku-4-5` for cheaper, `claude-opus-4-7` for higher quality. |
 | `MAX_TOKENS` | `1024` | Cap on enrichment response length. |
+| `WEBHOOK_BEARER_TOKEN` | *(empty)* | Shared bearer token for `/webhook`. **Set this** — see Authentication below. |
+| `WEBHOOK_HMAC_SECRET` | *(empty)* | Alternative to the bearer token: HMAC-SHA256 over the raw body. |
+| `MAX_BODY_BYTES` | `1048576` | Reject request bodies larger than this (413). |
+| `MAX_ALERTS_PER_REQUEST` | `200` | Reject a single POST carrying more alerts than this (413). |
 | `DOWNSTREAM_WEBHOOK_URL` | *(empty)* | Where enriched alerts go. Slack incoming webhook URL works out of the box. Empty = print to stdout. |
 | `BREAKER_FAILURE_THRESHOLD` | `5` | Consecutive LLM failures before the breaker opens. |
 | `BREAKER_RESET_SECONDS` | `30` | How long the breaker stays open before retry-eligible. |
@@ -98,9 +102,49 @@ All settings are environment variables under the `ALERT_EXPLAINER_` prefix.
 | `WORKER_CONCURRENCY` | `4` | How many parallel LLM calls in flight. |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 
+## Authentication
+
+`/webhook` triggers a paid LLM call for every alert it accepts, so an open endpoint is a
+cost-amplification DoS, not just an integrity problem. Set one of the two credentials
+below before exposing the service — with neither set, the endpoint stays open and the
+app logs a warning on every startup.
+
+**Bearer token — use this with Alertmanager.** Alertmanager cannot compute request
+signatures, so this is the mechanism that works when it posts here directly:
+
+```bash
+export ALERT_EXPLAINER_WEBHOOK_BEARER_TOKEN=$(openssl rand -hex 32)
+```
+
+```yaml
+# alertmanager.yml
+receivers:
+  - name: alert-explainer
+    webhook_configs:
+      - url: http://alert-explainer:8080/webhook
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /etc/alertmanager/alert-explainer-token
+```
+
+**HMAC signature — use this for senders you control.** Send
+`X-Alert-Explainer-Signature: sha256=<hex>`, computed over the exact raw request body:
+
+```bash
+export ALERT_EXPLAINER_WEBHOOK_HMAC_SECRET=$(openssl rand -hex 32)
+```
+
+```python
+signature = "sha256=" + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+```
+
+If both are configured, either one validates.
+
 ## Endpoints
 
 - `POST /webhook` — Alertmanager v4 payload. Returns `202 {"accepted": N, "dropped": N, "depth": N}`.
+  `401` if credentials are configured and missing/invalid; `413` if the body or alert count is over the cap.
 - `GET /healthz` — liveness. Always 200 unless the event loop is wedged.
 - `GET /readyz` — readiness. 200 when accepting traffic, 503 when queue ≥ 95% full or breaker is open.
 - `GET /metrics` — JSON snapshot of queue depth, breaker state, version, model, SLO targets.

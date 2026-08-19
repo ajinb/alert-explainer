@@ -9,6 +9,13 @@ receivers:
       - url: http://alert-explainer.observability.svc.cluster.local:8080/webhook
         send_resolved: true
         max_alerts: 100  # Alertmanager's own batching; alert-explainer also has its own queue.
+        # /webhook bills an LLM call per alert, so authenticate it. Alertmanager
+        # can't sign requests — the bearer token is the mechanism that works here.
+        # Must match ALERT_EXPLAINER_WEBHOOK_BEARER_TOKEN on the service.
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /etc/alertmanager/alert-explainer-token
 
 # Example route fragment — only critical and warning alerts go through enrichment.
 # Info-tier alerts skip enrichment to stay under SLO cost target.

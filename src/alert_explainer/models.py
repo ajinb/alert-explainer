@@ -1,15 +1,33 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ---------- Inbound: Prometheus Alertmanager webhook shape ----------
 # Reference: https://prometheus.io/docs/alerting/latest/configuration/#webhook_config
+
+# Label and annotation values land in the LLM prompt, so their length is a cost
+# lever for whoever can write them. Truncate rather than reject: a long
+# annotation should not stop a critical alert from being triaged.
+MAX_FIELD_CHARS = 4096
+_TRUNCATION_MARKER = "…[truncated]"
+
+
+def _truncate_values(mapping: dict[str, str]) -> dict[str, str]:
+    return {
+        k: (v if len(v) <= MAX_FIELD_CHARS else v[:MAX_FIELD_CHARS] + _TRUNCATION_MARKER)
+        for k, v in mapping.items()
+    }
 
 
 class Alert(BaseModel):
     status: Literal["firing", "resolved"] = "firing"
     labels: dict[str, str] = Field(default_factory=dict)
     annotations: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("labels", "annotations")
+    @classmethod
+    def _cap_field_lengths(cls, v: dict[str, str]) -> dict[str, str]:
+        return _truncate_values(v)
     startsAt: str = ""
     endsAt: str = ""
     generatorURL: str = ""

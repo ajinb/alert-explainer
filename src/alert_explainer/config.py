@@ -8,6 +8,23 @@ class Settings(BaseSettings):
     model: str = "claude-sonnet-4-6"
     max_tokens: int = 1024
 
+    # Authentication for the Alertmanager webhook. Every enqueued alert costs an
+    # LLM call, so an unauthenticated endpoint is a cost-amplification DoS.
+    #
+    # Two mechanisms; configure at least one. Alertmanager cannot compute request
+    # signatures, so a bearer token is what you want when it posts here directly
+    # (http_config.authorization). Use the HMAC secret when a relay or gateway
+    # signs on its behalf, or for any sender you control. If both are set, either
+    # one validates. Both empty disables verification — dev only; the app warns
+    # loudly at startup.
+    webhook_bearer_token: str = ""
+    webhook_hmac_secret: str = ""
+
+    # Inbound request bounds. A single POST should not be able to exhaust memory
+    # or enqueue unbounded paid work.
+    max_body_bytes: int = 1_048_576  # 1 MiB
+    max_alerts_per_request: int = 200
+
     # Downstream where enriched alerts are POSTed (Slack incoming-webhook URL, PagerDuty events API, or your own).
     downstream_webhook_url: str = ""
 
