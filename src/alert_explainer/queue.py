@@ -19,7 +19,7 @@ import structlog
 
 from .breaker import CircuitBreaker, CircuitOpen
 from .config import settings
-from .enrich import enrich_alert
+from .enrich import EnrichmentSchemaError, enrich_alert
 from .models import Alert, EnrichedAlert
 
 log = structlog.get_logger()
@@ -38,6 +38,10 @@ class AlertWorkQueue:
         self._breaker: CircuitBreaker[None] = CircuitBreaker(
             failure_threshold=settings.breaker_failure_threshold,
             reset_seconds=settings.breaker_reset_seconds,
+            # A malformed reply means the LLM is up and answering, just not in
+            # the shape we asked for. Counting that as a breaker failure let bad
+            # model output degrade enrichment for every alert behind it.
+            ignore_exceptions=(EnrichmentSchemaError,),
         )
         self._workers: list[asyncio.Task[None]] = []
         self._running = False
