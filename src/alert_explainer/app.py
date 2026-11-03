@@ -10,10 +10,12 @@ from typing import Any
 
 import structlog
 from fastapi import FastAPI, HTTPException, Request, Response, status
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import ValidationError
 
-from . import __version__, sink
+from . import __version__, metrics, sink
 from .config import settings
+from .dedup import TTLCache
 from .models import AlertmanagerPayload
 from .queue import AlertWorkQueue
 
@@ -21,6 +23,9 @@ logging.basicConfig(level=settings.log_level)
 log = structlog.get_logger()
 
 queue = AlertWorkQueue(sink=sink.send)
+# (fingerprint, status, startsAt) seen inside the window → Alertmanager retry or repeat.
+recent_alerts: TTLCache[bool] = TTLCache(settings.dedup_window_seconds, settings.cache_maxsize)
+metrics.BUILD_INFO.info({"version": __version__, "model": settings.model})
 
 SIGNATURE_HEADER = "X-Alert-Explainer-Signature"
 
@@ -81,6 +86,7 @@ async def lifespan(_app: FastAPI) -> Any:
                 "Set one before exposing this service."
             ),
         )
+    sink.build_sinks(settings)  # fail fast on a misconfigured sink, not on the first alert
     await queue.start()
     yield
     await queue.stop()
@@ -96,6 +102,13 @@ async def receive_alertmanager(request: Request) -> dict[str, Any]:
 
     Signature-verified and size-bounded before anything is parsed or enqueued.
     """
+    content_type = request.headers.get("content-type", "application/json").split(";")[0].strip()
+    if content_type not in ("application/json", ""):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Expected application/json (the Alertmanager webhook format).",
+        )
+
     declared = request.headers.get("content-length")
     if declared is not None and declared.isdigit() and int(declared) > settings.max_body_bytes:
         raise HTTPException(
@@ -103,12 +116,17 @@ async def receive_alertmanager(request: Request) -> dict[str, Any]:
             detail=f"Body exceeds {settings.max_body_bytes} bytes.",
         )
 
-    body = await request.body()
-    if len(body) > settings.max_body_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Body exceeds {settings.max_body_bytes} bytes.",
-        )
+    # Read incrementally: a chunked request has no Content-Length, and
+    # `await request.body()` would buffer all of it before any size check.
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > settings.max_body_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Body exceeds {settings.max_body_bytes} bytes.",
+            )
+    body = bytes(body)
 
     _authenticate(request, body)
 
@@ -116,7 +134,8 @@ async def receive_alertmanager(request: Request) -> dict[str, Any]:
         payload = AlertmanagerPayload.model_validate_json(body)
     except ValidationError as e:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.errors()
+            status_code=422,
+            detail=e.errors(include_url=False, include_input=False),
         ) from e
 
     if len(payload.alerts) > settings.max_alerts_per_request:
@@ -128,9 +147,15 @@ async def receive_alertmanager(request: Request) -> dict[str, Any]:
             ),
         )
 
-    accepted = 0
-    dropped = 0
+    accepted = dropped = duplicates = 0
     for alert in payload.alerts:
+        if not recent_alerts.add_if_absent(
+            f"{alert.dedup_key}:{alert.status}:{alert.startsAt}", True
+        ):
+            duplicates += 1
+            metrics.ALERTS_DROPPED.labels("duplicate").inc()
+            continue
+        metrics.ALERTS_RECEIVED.labels(alert.status).inc()
         if await queue.enqueue(alert):
             accepted += 1
         else:
@@ -139,10 +164,16 @@ async def receive_alertmanager(request: Request) -> dict[str, Any]:
         "webhook_received",
         accepted=accepted,
         dropped=dropped,
+        duplicates=duplicates,
         receiver=payload.receiver,
         depth=queue.depth,
     )
-    return {"accepted": accepted, "dropped": dropped, "depth": queue.depth}
+    return {
+        "accepted": accepted,
+        "dropped": dropped,
+        "duplicates": duplicates,
+        "depth": queue.depth,
+    }
 
 
 @app.get("/healthz")
@@ -151,33 +182,44 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/readyz")
-async def readyz(response: Response) -> dict[str, Any]:
-    """Readiness — true when we are willing to accept traffic. Goes 503 when the queue is
-    saturated or the LLM circuit breaker is open, so Alertmanager / load balancers can shed."""
+def _readiness() -> dict[str, Any]:
     queue_full = queue.depth >= int(settings.queue_maxsize * 0.95)
     breaker_open = queue.breaker_open
-    ready = not (queue_full or breaker_open)
-    if not ready:
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return {
-        "ready": ready,
+        "ready": not (queue_full or breaker_open),
         "queue_depth": queue.depth,
         "queue_maxsize": settings.queue_maxsize,
         "breaker_open": breaker_open,
     }
 
 
+@app.get("/readyz")
+async def readyz(response: Response) -> dict[str, Any]:
+    """Readiness — true when we are willing to accept traffic. Goes 503 when the queue is
+    saturated or the LLM circuit breaker is open, so Alertmanager / load balancers can shed."""
+    state = _readiness()
+    if not state["ready"]:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return state
+
+
 @app.get("/metrics")
-async def metrics() -> dict[str, Any]:
-    """Coarse internal counters in JSON. Swap to prometheus_client + a /metrics text endpoint when
-    you wire this into Prometheus for real."""
+async def prometheus_metrics() -> Response:
+    """Prometheus text exposition: queue, breaker, enrichment outcomes, latency, tokens,
+    spend, deliveries and dedup drops. See metrics.py for the full list."""
+    return Response(generate_latest(metrics.REGISTRY), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get("/status")
+async def status_snapshot() -> dict[str, Any]:
+    """Human-readable JSON snapshot (the pre-0.2 /metrics payload)."""
     return {
-        "queue_depth": queue.depth,
-        "queue_maxsize": settings.queue_maxsize,
-        "breaker_open": queue.breaker_open,
+        **_readiness(),
         "version": __version__,
         "model": settings.model,
+        "effort": settings.effort,
+        "sinks": [s.name for s in sink.build_sinks(settings)],
+        "dedup_entries": len(recent_alerts),
         "slo_p50_latency_ms": settings.slo_p50_latency_ms,
         "slo_cost_per_alert_usd": settings.slo_cost_per_alert_usd,
     }

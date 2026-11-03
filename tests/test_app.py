@@ -87,11 +87,19 @@ def test_readyz_reports_state(client: TestClient) -> None:
     assert body["breaker_open"] is False
 
 
-def test_metrics_endpoint_shape(client: TestClient) -> None:
-    r = client.get("/metrics")
+def test_status_endpoint_shape(client: TestClient) -> None:
+    r = client.get("/status")
     body = r.json()
-    for key in ("queue_depth", "breaker_open", "version", "model"):
+    for key in ("queue_depth", "breaker_open", "version", "model", "sinks"):
         assert key in body
+
+
+def test_metrics_endpoint_is_prometheus_text(client: TestClient) -> None:
+    r = client.get("/metrics")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
+    assert "alert_explainer_queue_depth" in r.text
+    assert "alert_explainer_breaker_open" in r.text
 
 
 # ---------------------------------------------------------------------------

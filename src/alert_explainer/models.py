@@ -1,6 +1,7 @@
+import hashlib
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ---------- Inbound: Prometheus Alertmanager webhook shape ----------
 # Reference: https://prometheus.io/docs/alerting/latest/configuration/#webhook_config
@@ -35,6 +36,14 @@ class Alert(BaseModel):
     fingerprint: str = ""
 
     @property
+    def dedup_key(self) -> str:
+        """Alertmanager's fingerprint, or a stable hash of the label set when it is absent."""
+        if self.fingerprint:
+            return self.fingerprint
+        canonical = "\x1f".join(f"{k}={v}" for k, v in sorted(self.labels.items()))
+        return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
+    @property
     def severity(self) -> str:
         return self.labels.get("severity", "unknown").lower()
 
@@ -57,13 +66,48 @@ class Alert(BaseModel):
 
 
 class AlertmanagerPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     version: str = "4"
     groupKey: str = ""
     receiver: str = ""
-    status: str = "firing"
+    status: Literal["firing", "resolved"] = "firing"
     alerts: list[Alert] = Field(default_factory=list)
     commonLabels: dict[str, str] = Field(default_factory=dict)
     commonAnnotations: dict[str, str] = Field(default_factory=dict)
+
+
+# ---------- LLM contract: what the model must return ----------
+
+
+class TriageBrief(BaseModel):
+    """The shape the model is asked for. Sent as a structured-output JSON schema."""
+
+    summary: str
+    likely_causes: list[str]
+    triage_checklist: list[str]
+    false_positive_check: str
+    confidence: Literal["high", "medium", "low"]
+
+
+TRIAGE_BRIEF_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "likely_causes": {"type": "array", "items": {"type": "string"}},
+        "triage_checklist": {"type": "array", "items": {"type": "string"}},
+        "false_positive_check": {"type": "string"},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+    },
+    "required": [
+        "summary",
+        "likely_causes",
+        "triage_checklist",
+        "false_positive_check",
+        "confidence",
+    ],
+    "additionalProperties": False,
+}
 
 
 # ---------- Outbound: enriched alert ----------

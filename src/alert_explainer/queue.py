@@ -19,9 +19,11 @@ import structlog
 from cloudandsre import AsyncCircuitBreaker
 from cloudandsre.circuit_breaker import CircuitOpenError
 
+from . import metrics
 from .config import settings
-from .enrich import EnrichmentSchemaError, enrich_alert
-from .models import Alert, EnrichedAlert
+from .dedup import TTLCache
+from .enrich import EnrichmentRefused, EnrichmentSchemaError, enrich_alert
+from .models import Alert, EnrichedAlert, Enrichment
 
 log = structlog.get_logger()
 
@@ -46,6 +48,13 @@ class AlertWorkQueue:
         )
         self._workers: list[asyncio.Task[None]] = []
         self._running = False
+        # A re-fire of an alert we explained recently reuses that brief: same
+        # fingerprint and status means the same labels, so the same answer.
+        self._cache: TTLCache[Enrichment] = TTLCache(
+            settings.enrichment_cache_ttl_seconds, settings.cache_maxsize
+        )
+        metrics.QUEUE_DEPTH.set_function(lambda: self.depth)
+        metrics.BREAKER_OPEN.set_function(lambda: 1.0 if self.breaker_open else 0.0)
 
     @property
     def depth(self) -> int:
@@ -61,6 +70,7 @@ class AlertWorkQueue:
             self._q.put_nowait((alert.priority_rank, next(_seq), time.monotonic(), alert))
             return True
         except asyncio.QueueFull:
+            metrics.ALERTS_DROPPED.labels("queue_full").inc()
             log.warning(
                 "queue_full_dropping_alert",
                 alertname=alert.alertname,
@@ -101,10 +111,22 @@ class AlertWorkQueue:
                 self._q.task_done()
 
     async def _enrich_one(self, alert: Alert) -> EnrichedAlert:
+        cache_key = f"{alert.dedup_key}:{alert.status}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            metrics.ENRICHMENTS.labels("cached").inc()
+            reused = cached.model_copy(update={"cost_usd": 0.0, "latency_ms": 0, "cache_hit": True})
+            return EnrichedAlert(alert=alert, enrichment=reused)
+
+        started = time.monotonic()
         try:
             enrichment = await self._breaker.call(lambda: enrich_alert(alert))
+            metrics.ENRICHMENTS.labels("ok").inc()
+            metrics.ENRICHMENT_LATENCY.observe(time.monotonic() - started)
+            self._cache.set(cache_key, enrichment)
             return EnrichedAlert(alert=alert, enrichment=enrichment)
         except CircuitOpenError:
+            metrics.ENRICHMENTS.labels("circuit_open").inc()
             log.warning(
                 "circuit_open_passthrough",
                 alertname=alert.alertname,
@@ -112,6 +134,14 @@ class AlertWorkQueue:
             )
             return EnrichedAlert(alert=alert, enrichment_error="llm_circuit_open")
         except Exception as e:
+            outcome = (
+                "refused"
+                if isinstance(e, EnrichmentRefused)
+                else "schema_error"
+                if isinstance(e, EnrichmentSchemaError)
+                else "llm_error"
+            )
+            metrics.ENRICHMENTS.labels(outcome).inc()
             log.warning(
                 "enrichment_failed_passthrough",
                 alertname=alert.alertname,

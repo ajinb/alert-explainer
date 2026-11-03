@@ -1,0 +1,13 @@
+apiVersion: v2
+name: alert-explainer
+description: Enriches Prometheus Alertmanager alerts with AI-generated triage briefs before they reach on-call.
+type: application
+version: 0.2.0
+appVersion: "0.2.0"
+home: https://github.com/ajinb/alert-explainer
+sources:
+  - https://github.com/ajinb/alert-explainer
+keywords: [prometheus, alertmanager, sre, on-call, llm]
+maintainers:
+  - name: Ajin Baby
+    url: https://cloudandsre.com

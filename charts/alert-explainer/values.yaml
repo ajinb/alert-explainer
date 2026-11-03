@@ -1,0 +1,73 @@
+replicaCount: 1  # in-process queue, dedup and cache: scale vertically until you add Redis
+
+image:
+  repository: ghcr.io/ajinb/alert-explainer
+  tag: ""  # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Non-secret settings, rendered as ALERT_EXPLAINER_* environment variables.
+config:
+  MODEL: claude-sonnet-5-5
+  EFFORT: low
+  SINKS: stdout          # slack,teams,pagerduty,opsgenie,webhook,stdout
+  DEDUP_WINDOW_SECONDS: "300"
+  ENRICHMENT_CACHE_TTL_SECONDS: "1800"
+  QUEUE_MAXSIZE: "1000"
+  WORKER_CONCURRENCY: "4"
+  LOG_LEVEL: INFO
+
+# Secrets: reference an existing Secret (recommended, e.g. from External Secrets),
+# or let the chart create one from secret.values (dev only - values land in Helm history).
+secret:
+  existingSecret: ""
+  # Keys expected in the Secret, mapped to ALERT_EXPLAINER_<KEY>:
+  #   ANTHROPIC_API_KEY (required), WEBHOOK_BEARER_TOKEN (strongly recommended),
+  #   SLACK_WEBHOOK_URL, TEAMS_WEBHOOK_URL, PAGERDUTY_ROUTING_KEY, OPSGENIE_API_KEY,
+  #   DOWNSTREAM_WEBHOOK_URL, WEBHOOK_HMAC_SECRET
+  create: false
+  values: {}
+
+# Optional team context (service catalogue, dashboards, runbook conventions)
+# appended to the cached system prompt.
+teamContext: ""
+
+service:
+  type: ClusterIP
+  port: 8080
+
+serviceMonitor:
+  enabled: false   # requires the Prometheus Operator CRDs
+  interval: 30s
+  labels: {}
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}

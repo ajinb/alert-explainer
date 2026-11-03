@@ -5,7 +5,7 @@ services:
     ports: ["8080:8080"]
     environment:
       ALERT_EXPLAINER_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
-      ALERT_EXPLAINER_MODEL: claude-sonnet-4-6
+      ALERT_EXPLAINER_MODEL: claude-sonnet-5-5
       # Leave DOWNSTREAM_WEBHOOK_URL empty to print enriched alerts to stdout.
       ALERT_EXPLAINER_DOWNSTREAM_WEBHOOK_URL: ${DOWNSTREAM_WEBHOOK_URL:-}
       ALERT_EXPLAINER_WEBHOOK_BEARER_TOKEN: ${WEBHOOK_BEARER_TOKEN:-}
