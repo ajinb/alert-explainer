@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+title: "alert-explainer"
+message: "If you use this software, please cite it using the metadata below."
+type: software
+authors:
+  - family-names: Baby
+    given-names: Ajin
+    orcid: "https://orcid.org/0009-0007-6190-9516"
+repository-code: "https://github.com/ajinb/alert-explainer"
+url: "https://cloudandsre.com"
+abstract: "Drop-in service that enriches Prometheus alerts with AI-generated triage briefs. Sits between Alertmanager and your on-call routing."
+license: Apache-2.0
+version: "0.2.0"
+date-released: "2026-11-02"
+keywords:
+  - prometheus
+  - alertmanager
+  - sre
+  - llm
+  - on-call
