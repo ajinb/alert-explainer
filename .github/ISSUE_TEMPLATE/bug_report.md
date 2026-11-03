@@ -24,7 +24,7 @@ labels: bug
 - Python version:
 - Deployment: <!-- docker-compose / Kubernetes / bare metal -->
 - Alertmanager version:
-- Anthropic model in use: <!-- e.g. claude-sonnet-4-6 -->
+- Anthropic model in use: <!-- e.g. claude-sonnet-5-5 -->
 
 **Sample alert that triggered the bug**
 

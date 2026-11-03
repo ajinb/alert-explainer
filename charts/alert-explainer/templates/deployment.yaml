@@ -1,0 +1,91 @@
+{{- if and (not .Values.secret.existingSecret) (not .Values.secret.create) }}
+{{- fail "Set secret.existingSecret (recommended) or secret.create=true with secret.values.ANTHROPIC_API_KEY" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "alert-explainer.fullname" . }}
+  labels:
+    {{- include "alert-explainer.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "alert-explainer.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "alert-explainer.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: alert-explainer
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "alert-explainer.fullname" . }}
+          env:
+            {{- range $key := list "ANTHROPIC_API_KEY" "WEBHOOK_BEARER_TOKEN" "WEBHOOK_HMAC_SECRET" "SLACK_WEBHOOK_URL" "TEAMS_WEBHOOK_URL" "PAGERDUTY_ROUTING_KEY" "OPSGENIE_API_KEY" "DOWNSTREAM_WEBHOOK_URL" }}
+            - name: ALERT_EXPLAINER_{{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "alert-explainer.secretName" $ }}
+                  key: {{ $key }}
+                  optional: {{ ne $key "ANTHROPIC_API_KEY" }}
+            {{- end }}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.teamContext }}
+            - name: team-context
+              mountPath: /etc/alert-explainer
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.teamContext }}
+        - name: team-context
+          configMap:
+            name: {{ include "alert-explainer.fullname" . }}
+            items:
+              - key: team-context.md
+                path: team-context.md
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

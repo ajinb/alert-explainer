@@ -4,6 +4,46 @@ All notable changes to alert-explainer are documented in this file. Format follo
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-11
+
+### Security
+- `/webhook` buffered the whole request body before checking its size, so a chunked request
+  with no `Content-Length` could exhaust memory. The body is now read incrementally and cut
+  off at `MAX_BODY_BYTES`.
+- 422 responses no longer echo the offending input back to the caller.
+- The default bind address is `127.0.0.1`; the container image opts into `0.0.0.0`.
+- `cloudandsre` is pinned to the `v0.2.0` tag instead of `@main`.
+
+### Added
+- **Sinks:** Microsoft Teams (Adaptive Card), PagerDuty Events API v2 (trigger/resolve on one
+  `dedup_key`), Opsgenie (create/close by alias), raw JSON webhook; fan-out to several at once (#10).
+- **Delivery retries** with exponential backoff and `Retry-After` support, plus a JSONL
+  dead-letter file for anything still undelivered (#1).
+- **Prometheus metrics** at `/metrics` (text format): received, dropped (by reason),
+  enrichment outcomes, latency histogram, tokens, spend, deliveries, queue depth, breaker (#2).
+- **Retry-storm dedup** on `(fingerprint, status, startsAt)` (#4) and an **enrichment cache**
+  keyed by fingerprint so a re-fire costs nothing (#6).
+- Stricter webhook validation (`status` enum, content type, non-object bodies) with negative-path
+  tests (#3).
+- **Helm chart** (`charts/alert-explainer`): non-root, read-only root FS, existing-Secret
+  support, optional ServiceMonitor and PDB (#7).
+- **Structured outputs**: the triage brief is schema-constrained by the API.
+- **Refusal fallback** (`fallbacks: "default"`) on supported models; a surviving refusal is
+  reported without a pointless retry and never trips the breaker.
+- Optional **OpenTelemetry GenAI spans** (`pip install ".[otel]"`).
+- `SYSTEM_CONTEXT_FILE`: team context inside the cached prompt prefix.
+- Tests that drive the real Anthropic SDK through a mock transport.
+
+### Changed
+- Default model `claude-sonnet-4-6` → `claude-sonnet-5-5`, effort `low`, `MAX_TOKENS` 4096,
+  `ENRICH_TIMEOUT_SECONDS` 20. `anthropic` pinned to `>=2.4,<3`.
+- `/metrics` is Prometheus text; the old JSON snapshot moved to `/status`.
+- Cost is attributed to the model that served the reply (relevant when a fallback ran).
+
+### Fixed
+- The prompt-caching claim: caching only engages above the model's minimum cacheable prefix,
+  which the stock prompt does not reach on its own. The README and docstring now say so.
+
 ## [0.1.0] — 2026-04-28
 
 Initial release.

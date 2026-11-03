@@ -1,0 +1,14 @@
+alert-explainer is listening on {{ include "alert-explainer.fullname" . }}:{{ .Values.service.port }}.
+
+Point Alertmanager at it (bearer token from your Secret's WEBHOOK_BEARER_TOKEN):
+
+  receivers:
+    - name: alert-explainer
+      webhook_configs:
+        - url: http://{{ include "alert-explainer.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/webhook
+          send_resolved: true
+          http_config:
+            authorization:
+              credentials_file: /etc/alertmanager/secrets/alert-explainer-token
+
+Metrics: /metrics (Prometheus text). Status: /status.
